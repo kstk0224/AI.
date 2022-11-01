@@ -1,0 +1,51 @@
+#@title ### 0. 檢查 GPU 工作狀態
+
+!nvidia-smi
+#@title ### 1. 下載 Novel AI API 後端、模型 
+#@markdown 如果下載速度太慢可以嘗試 restart
+
+%cd /content/
+!apt install -y -qq aria2
+!aria2c --summary-interval=5 -x 3 --allow-overwrite=true -Z \
+  https://pub-2fdef7a2969f43289c42ac5ae3412fd4.r2.dev/naifu.tar \
+  https://pub-2fdef7a2969f43289c42ac5ae3412fd4.r2.dev/animefull-latest.tar 
+  
+!echo "Decompressing..."
+!tar xf naifu.tar && rm naifu.tar
+!echo "Done."
+#@title ### 2. 安裝依賴
+#@markdown 耐心等待安裝完成
+
+%cd /content/naifu
+!pip install virtualenv && bash ./setup.sh
+!curl -Ls https://github.com/ekzhang/bore/releases/download/v0.4.0/bore-v0.4.0-x86_64-unknown-linux-musl.tar.gz | tar zx -C /usr/bin
+!curl -Lo /usr/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x /usr/bin/cloudflared
+#@title ### 3. 啟動模型
+#@markdown 訪問輸出的映射地址（以 trycloudflare.com / bore.pub 結尾）即可。
+#@markdown - 請等待模型加載完成（出現`Application startup complete`字樣）再訪問
+#@markdown - cloudflare 提供的服務偶爾會出現請求超時，可換用 bore 隧道
+
+%cd /content/naifu
+!sed -i 's/# export SAVE_FILES="1"/export SAVE_FILES="1"/g' run.sh
+!bash run.sh & cloudflared tunnel --url localhost:6969
+#@title ### 4. （可選）使用 7G 的 animefull-latest 模型運行
+#@markdown 默認使用的是 4G 大小的 animefull-final-pruned 模型。如果想使用 7G 的 animefull-latest 模型，運行這個
+
+%cd /content/
+!tar xf animefull-latest.tar -C /content/naifu/models && rm animefull-latest.tar
+!sed -i 's/map_location="cpu"/map_location="cuda"/g' /content/naifu/hydra_node/models.py
+
+%cd /content/naifu
+%env DTYPE=float16
+%env CLIP_CONTEXTS=3
+%env AMP=1
+%env MODEL=stable-diffusion
+%env DEV=True
+%env MODEL_PATH=models/animefull-latest
+%env ENABLE_EMA=1
+%env VAE_PATH=models/animevae.pt
+%env PENULTIMATE=1
+%env PYTHONDONTWRITEBYTECODE=1
+%env SAVE_FILES=1
+
+!./venv/bin/python -m uvicorn --host 0.0.0.0 --port=6969 main:app & bore local 6969 --to bore.pub & cloudflared tunnel --url localhost:6969
